@@ -23,6 +23,8 @@ enum TapeMotion {
     Right,
 }
 
+const HALT: isize = -1;
+
 struct TuringStep {
     print: Bit,
     motion: TapeMotion,
@@ -63,12 +65,44 @@ struct TuringMachine<const N: usize> {
     states: [TuringState; N],
 }
 
+macro_rules! turing_machine {
+    ( $(($print0:expr, $motion0:expr, $state0:expr; $print1:expr, $motion1:expr, $state1:expr)),+ ) => {
+        TuringMachine {
+            states: [$(
+                TuringState {
+                    zero: TuringStep {
+                        print: $print0,
+                        motion: $motion0,
+                        next_state: $state0,
+                    },
+                    one: TuringStep {
+                        print: $print1,
+                        motion: $motion1,
+                        next_state: $state1,
+                    },
+                },
+            )*],
+        }
+    };
+}
+
+/*
+static BB2_MACH: TuringMachine<2> = turing_machine!(
+    (One, Right, 1; One, Left, 1),
+    (One, Left, 0; One, Right, HALT)
+);
+*/
+
 struct CompiledTuringMachine<T: Unsigned + PrimInt, const N: usize> {
     lut: Box<[T]>,
 }
 
 fn main() {
-    let tm = TuringMachine {
+    let tm = turing_machine!(
+        (One, Right, 1; One, Left, 1),
+        (One, Left, 0; One, Right, HALT)
+    );
+    /*let tm = TuringMachine {
         states: [
             TuringState {
                 zero: TuringStep {
@@ -95,7 +129,7 @@ fn main() {
                 },
             },
         ],
-    };
+    };*/
     let mut tape: u8 = 0;
     let mut position: isize = 3;
     let mut state: isize = 0;
