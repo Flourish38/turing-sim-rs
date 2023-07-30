@@ -5,6 +5,7 @@ use num_traits::PrimInt;
 use num_traits::Unsigned;
 
 use Bit::*;
+use State::*;
 use TapeMotion::*;
 
 fn as_bits<T: PrimInt>(x: T) -> String {
@@ -55,18 +56,57 @@ fn set_bit<T: PrimInt>(x: &mut T, pos: usize, b: Bit) {
     }
 }
 
+impl Display for Bit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Zero => f.write_str("0"),
+            One => f.write_str("1"),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum TapeMotion {
     Left,
     Right,
 }
 
-const HALT: isize = -1;
+impl Display for TapeMotion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Left => f.write_str("<-"),
+            Right => f.write_str("->"),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum State {
+    HALT,
+    Index(usize),
+}
+
+impl From<usize> for State {
+    fn from(value: usize) -> Self {
+        Index(value)
+    }
+}
+
+impl Display for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HALT => f.write_str("HALT"),
+            Index(i) => f.write_fmt(format_args!("s{}", i)),
+        }
+    }
+}
+
+//const HALT: isize = -1;
 
 struct TuringStep {
     print: Bit,
     motion: TapeMotion,
-    next_state: isize,
+    next_state: State,
 }
 
 struct TuringState {
@@ -76,6 +116,7 @@ struct TuringState {
 
 struct TuringMachine<const N: usize> {
     states: [TuringState; N],
+    state: State,
 }
 
 macro_rules! turing_machine {
@@ -86,15 +127,16 @@ macro_rules! turing_machine {
                     zero: TuringStep {
                         print: $print0,
                         motion: $motion0,
-                        next_state: $state0,
+                        next_state: $state0.into(),
                     },
                     one: TuringStep {
                         print: $print1,
                         motion: $motion1,
-                        next_state: $state1,
+                        next_state: $state1.into(),
                     },
                 },
             )*],
+            state: 0.into(),
         }
     };
 }
@@ -172,6 +214,21 @@ impl<T: Unsigned + PrimInt> Tape<T> {
             }
         }
     }
+
+    fn get_index(&self) -> isize {
+        let bits = size_of::<T>() * 8;
+        let shift = (bits.ilog2()) as usize;
+        match self.half {
+            Right => ((self.vec_index << shift) | self.bit_index) as isize,
+            // bitwise negation happens to be perfect here, since (Left, 0, 0) maps to -1
+            Left => (!((self.vec_index << shift) | self.bit_index)) as isize,
+        }
+    }
+
+    fn get_display_index(&self) -> usize {
+        let bits = size_of::<T>() * 8;
+        ((self.left.len() * bits) as isize + self.get_index()) as usize
+    }
 }
 
 impl<T: Unsigned + PrimInt> Display for Tape<T> {
@@ -184,6 +241,54 @@ impl<T: Unsigned + PrimInt> Display for Tape<T> {
             .chain(self.right.iter().map(|x| as_bits_rev(*x)))
             .collect();
         f.write_str(output.as_str())
+    }
+}
+
+fn show_state<const N: usize, T: Unsigned + PrimInt>(tm: &TuringMachine<N>, tape: &Tape<T>) {
+    print!(
+        "{}^{} \t{}",
+        " ".repeat(tape.get_display_index()),
+        tape.get_index(),
+        tm.state
+    );
+    if let Index(state) = tm.state {
+        let bit = tape.get();
+        let step = match bit {
+            Zero => &tm.states[state].zero,
+            One => &tm.states[state].one,
+        };
+        println!(
+            ".{}: {} {} {}",
+            bit, step.print, step.motion, step.next_state
+        )
+    }
+}
+
+impl<const N: usize> TuringMachine<N> {
+    fn step<T: Unsigned + PrimInt>(&mut self, tape: &mut Tape<T>, state: usize) {
+        let step = match tape.get() {
+            Zero => &self.states[state].zero,
+            One => &self.states[state].one,
+        };
+        tape.set(step.print);
+        tape.move_tape(step.motion);
+        self.state = step.next_state;
+    }
+
+    fn run<T: Unsigned + PrimInt>(&mut self, tape: &mut Tape<T>) {
+        while let Index(state) = self.state {
+            self.step(tape, state);
+        }
+    }
+
+    fn run_verbose<T: Unsigned + PrimInt>(&mut self, tape: &mut Tape<T>) {
+        println!("{}", tape);
+        show_state(&self, tape);
+        while let Index(state) = self.state {
+            self.step(tape, state);
+            println!("{}", tape);
+            show_state(&self, tape);
+        }
     }
 }
 
@@ -204,27 +309,26 @@ static BB2_MACH: TuringMachine<2> = turing_machine!(
 );
 */
 
+/*
+static BB3_MACH: TuringMachine<3> = turing_machine!(
+    (One, Right, 1; One, Left, 2),
+    (One, Left, 0; One, Right, 1),
+    (One, Left, 1; One, Right, HALT),
+);
+*/
+
 struct CompiledTuringMachine<T: Unsigned + PrimInt> {
-    lut: Box<[T]>,
+    lut: Box<[(T, TapeMotion, State)]>,
 }
 
 fn main() {
-    let tm = turing_machine!(
-        (One, Right, 1; One, Left, 1),
-        (One, Left, 0; One, Right, HALT)
+    let mut tm = turing_machine!(
+        (One, Right, 1; One, Left, 2),
+        (One, Left, 0; One, Right, 1),
+        (One, Left, 1; One, Right, HALT)
     );
     let mut tape = Tape::<u8>::new();
-    let mut state: isize = 0;
-    while state != HALT {
-        let step = match tape.get() {
-            Zero => &tm.states[state as usize].zero,
-            One => &tm.states[state as usize].one,
-        };
-        tape.set(step.print);
-        tape.move_tape(step.motion);
-        state = step.next_state;
-        println!("{}", tape);
-    }
+    tm.run_verbose(&mut tape);
 }
 
 /*
