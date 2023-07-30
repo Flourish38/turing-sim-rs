@@ -1,4 +1,4 @@
-use core::ops::Index;
+use std::fmt::Display;
 use std::mem::size_of;
 
 use num_traits::PrimInt;
@@ -7,17 +7,55 @@ use num_traits::Unsigned;
 use Bit::*;
 use TapeMotion::*;
 
-struct Tape<T: Unsigned + PrimInt> {
-    positive: Vec<T>,
-    negative: Vec<T>,
-    position: isize,
+fn as_bits<T: PrimInt>(x: T) -> String {
+    (0..8 * size_of::<T>())
+        .rev()
+        .map(|i| {
+            // These are guaranteed to be either 1 or 0 so no need for double-checking
+            if (x >> i) & T::one() == T::one() {
+                '1'
+            } else {
+                '0'
+            }
+        })
+        .collect()
 }
 
+fn as_bits_rev<T: PrimInt>(x: T) -> String {
+    (0..8 * size_of::<T>())
+        .map(|i| {
+            // These are guaranteed to be either 1 or 0 so no need for double-checking
+            if (x >> i) & T::one() == T::one() {
+                '1'
+            } else {
+                '0'
+            }
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy)]
 enum Bit {
     Zero,
     One,
 }
 
+fn get_bit<T: PrimInt>(x: T, pos: usize) -> Bit {
+    if x & (T::one() << pos) == T::zero() {
+        Zero
+    } else {
+        One
+    }
+}
+
+fn set_bit<T: PrimInt>(x: &mut T, pos: usize, b: Bit) {
+    match b {
+        Zero => *x = *x & !(T::one() << pos),
+        One => *x = *x | (T::one() << pos),
+    }
+}
+
+#[derive(Clone, Copy)]
 enum TapeMotion {
     Left,
     Right,
@@ -34,31 +72,6 @@ struct TuringStep {
 struct TuringState {
     zero: TuringStep,
     one: TuringStep,
-}
-
-impl<T: PrimInt> Index<T> for TuringState {
-    type Output = TuringStep;
-
-    fn index(&self, i: T) -> &Self::Output {
-        match i {
-            _ if i == T::zero() => &self.zero,
-            _ if i == T::one() => &self.one,
-            _ => panic!(),
-        }
-    }
-}
-
-fn as_bits<T: PrimInt>(x: T) -> String {
-    (0..8 * size_of::<T>())
-        .rev()
-        .map(|i| {
-            if (x >> i) & T::one() == T::one() {
-                '1'
-            } else {
-                '0'
-            }
-        })
-        .collect()
 }
 
 struct TuringMachine<const N: usize> {
@@ -86,6 +99,104 @@ macro_rules! turing_machine {
     };
 }
 
+struct Tape<T: Unsigned + PrimInt> {
+    right: Vec<T>,
+    left: Vec<T>,
+    vec_index: usize,
+    bit_index: usize,
+    half: TapeMotion,
+}
+
+impl<T: Unsigned + PrimInt> Tape<T> {
+    fn new() -> Tape<T> {
+        Tape {
+            right: vec![T::zero()],
+            left: vec![T::zero()],
+            vec_index: 0,
+            bit_index: 0,
+            half: Right,
+        }
+    }
+
+    fn get(&self) -> Bit {
+        // bytes * 8 = bits
+        let vec = match self.half {
+            Left => &self.left,
+            Right => &self.right,
+        };
+        let vec_value = vec[self.vec_index];
+        return get_bit(vec_value, self.bit_index);
+    }
+
+    fn set(&mut self, b: Bit) {
+        let vec = match self.half {
+            Left => &mut self.left,
+            Right => &mut self.right,
+        };
+        let vec_value = vec.get_mut(self.vec_index).unwrap();
+        return set_bit(vec_value, self.bit_index, b);
+    }
+
+    fn move_tape(&mut self, motion: TapeMotion) {
+        let bits = 8 * size_of::<T>();
+        match (self.half, motion) {
+            (Left, Left) | (Right, Right) => {
+                if self.bit_index == bits - 1 {
+                    self.bit_index = 0;
+                    self.vec_index += 1;
+                    let vec = match self.half {
+                        Left => &mut self.left,
+                        Right => &mut self.right,
+                    };
+                    if self.vec_index == vec.len() {
+                        vec.push(T::zero());
+                    }
+                } else {
+                    self.bit_index += 1;
+                }
+            }
+            (Left, Right) | (Right, Left) => {
+                if self.bit_index == 0 {
+                    if self.vec_index == 0 {
+                        self.half = match self.half {
+                            Left => Right,
+                            Right => Left,
+                        }
+                    } else {
+                        self.bit_index = bits - 1;
+                        self.vec_index -= 1;
+                    }
+                } else {
+                    self.bit_index -= 1;
+                }
+            }
+        }
+    }
+}
+
+impl<T: Unsigned + PrimInt> Display for Tape<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let output: String = self
+            .left
+            .iter()
+            .rev()
+            .map(|x| as_bits(*x))
+            .chain(self.right.iter().map(|x| as_bits_rev(*x)))
+            .collect();
+        f.write_str(output.as_str())
+    }
+}
+
+/*
+// I think this is literally impossible?
+// Because there's no way I could link a bit to the vec value without a very quirky return type
+impl<T: Unsigned + PrimInt> IndexMut<isize> for Tape<T> {
+    fn index_mut(&mut self, index: isize) -> &mut Self::Output {
+        todo!()
+    }
+}
+*/
+
 /*
 static BB2_MACH: TuringMachine<2> = turing_machine!(
     (One, Right, 1; One, Left, 1),
@@ -93,7 +204,7 @@ static BB2_MACH: TuringMachine<2> = turing_machine!(
 );
 */
 
-struct CompiledTuringMachine<T: Unsigned + PrimInt, const N: usize> {
+struct CompiledTuringMachine<T: Unsigned + PrimInt> {
     lut: Box<[T]>,
 }
 
@@ -102,52 +213,17 @@ fn main() {
         (One, Right, 1; One, Left, 1),
         (One, Left, 0; One, Right, HALT)
     );
-    /*let tm = TuringMachine {
-        states: [
-            TuringState {
-                zero: TuringStep {
-                    print: One,
-                    motion: Right,
-                    next_state: 1,
-                },
-                one: TuringStep {
-                    print: One,
-                    motion: Left,
-                    next_state: 1,
-                },
-            },
-            TuringState {
-                zero: TuringStep {
-                    print: One,
-                    motion: Left,
-                    next_state: 0,
-                },
-                one: TuringStep {
-                    print: One,
-                    motion: Right,
-                    next_state: -1,
-                },
-            },
-        ],
-    };*/
-    let mut tape: u8 = 0;
-    let mut position: isize = 3;
+    let mut tape = Tape::<u8>::new();
     let mut state: isize = 0;
-    while state != -1 {
-        let step = match tape & 1 << position {
-            0 => &tm.states[state as usize][0],
-            _ => &tm.states[state as usize][1], // That bit must not have been zero, regardless which bit it is
+    while state != HALT {
+        let step = match tape.get() {
+            Zero => &tm.states[state as usize].zero,
+            One => &tm.states[state as usize].one,
         };
-        match step.print {
-            Zero => tape &= !(1 << position),
-            One => tape |= 1 << position,
-        };
-        position += match step.motion {
-            Left => 1,
-            Right => -1,
-        };
+        tape.set(step.print);
+        tape.move_tape(step.motion);
         state = step.next_state;
-        println!("{}", as_bits(tape));
+        println!("{}", tape);
     }
 }
 
