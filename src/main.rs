@@ -319,7 +319,7 @@ static BB3_MACH: TuringMachine<3> = turing_machine!(
 
 /*
 static COPY_MACH: TuringMachine<5> = turing_machine!(
-    (Zero, Right, -1; Zero, Right, 1),
+    (Zero, Right, HALT; Zero, Right, 1),
     (Zero, Right, 2; One, Right, 1),
     (One, Left, 3; One, Right, 2),
     (Zero, Left, 4; One, Left, 3),
