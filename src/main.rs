@@ -317,17 +317,30 @@ static BB3_MACH: TuringMachine<3> = turing_machine!(
 );
 */
 
+/*
+static COPY_MACH: TuringMachine<5> = turing_machine!(
+    (Zero, Right, -1; Zero, Right, 1),
+    (Zero, Right, 2; One, Right, 1),
+    (One, Left, 3; One, Right, 2),
+    (Zero, Left, 4; One, Left, 3),
+    (One, Right, 0; One, Left, 4),
+);
+*/
+
 struct CompiledTuringMachine<T: Unsigned + PrimInt> {
     lut: Box<[(T, TapeMotion, State)]>,
 }
 
 fn main() {
     let mut tm = turing_machine!(
-        (One, Right, 1; One, Left, 2),
-        (One, Left, 0; One, Right, 1),
-        (One, Left, 1; One, Right, HALT)
+        (Zero, Right, HALT; Zero, Right, 1),
+        (Zero, Right, 2; One, Right, 1),
+        (One, Left, 3; One, Right, 2),
+        (Zero, Left, 4; One, Left, 3),
+        (One, Right, 0; One, Left, 4)
     );
     let mut tape = Tape::<u8>::new();
+    tape.right[0] = 0x03;
     tm.run_verbose(&mut tape);
 }
 
