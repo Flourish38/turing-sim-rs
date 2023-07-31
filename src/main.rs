@@ -1,6 +1,9 @@
 use std::fmt::Display;
+use std::mem::align_of;
 use std::mem::size_of;
+use std::ops::Index;
 
+use num_traits::NumCast;
 use num_traits::PrimInt;
 use num_traits::Unsigned;
 
@@ -261,6 +264,9 @@ fn show_state<const N: usize, T: Unsigned + PrimInt>(tm: &TuringMachine<N>, tape
             ".{}: {} {} {}",
             bit, step.print, step.motion, step.next_state
         )
+    } else {
+        // This is only in the halt state
+        println!();
     }
 }
 
@@ -327,8 +333,115 @@ static COPY_MACH: TuringMachine<5> = turing_machine!(
 );
 */
 
-struct CompiledTuringMachine<T: Unsigned + PrimInt> {
-    lut: Box<[(T, TapeMotion, State)]>,
+#[derive(Clone, Copy, Debug)]
+struct CompiledStep<T: Unsigned + PrimInt> {
+    tape: T,
+    direction_state: u8,
+}
+
+impl<T: Unsigned + PrimInt> CompiledStep<T> {
+    fn get_direction(&self) -> TapeMotion {
+        if self.direction_state & 1 == 0 {
+            Left
+        } else {
+            Right
+        }
+    }
+
+    fn get_state(&self) -> i8 {
+        let result = self.direction_state >> 1;
+        // all 1s except for the most significant, negative bit
+        if result == !0 >> 1 {
+            -1
+        } else {
+            result as i8
+        }
+    }
+}
+
+struct CompiledTuringMachine<T: Unsigned + PrimInt, const N: usize> {
+    tm: TuringMachine<N>,
+    lut: Vec<CompiledStep<T>>,
+}
+
+impl<const N: usize> TuringMachine<N> {
+    fn compile<T: Unsigned + PrimInt>(mut self) -> CompiledTuringMachine<T, N> {
+        assert!(N < i8::MAX as usize);
+        let bits: usize = size_of::<T>() * 8;
+        let num_steps: usize = N * 2 * 1 << bits;
+        let mut steps: Vec<CompiledStep<T>> = vec![
+            CompiledStep {
+                tape: T::zero(),
+                direction_state: 0,
+            };
+            num_steps
+        ];
+        let state_mask = !0 >> (8 * size_of::<usize>() - bits);
+        // the index i is in the form of
+        // [state_index: remaining bits] [entryDirection: 1 bit] [tape: size(T) bits]
+        // from most significant to least significant, or left to right.
+        for i in 0..num_steps {
+            // The mask is to make sure that the numcast will never fail.
+            let mut tape: T = NumCast::from(i & state_mask).unwrap();
+            // 0 means we entered from the left,
+            // anything else means we entered from the right
+            let mut position = match i & (1 << bits) {
+                0 => bits - 1,
+                _ => 0,
+            };
+            self.state = Index(i >> bits + 1);
+            let mut exited: Option<TapeMotion> = None;
+            while exited.is_none() {
+                if let Index(state) = self.state {
+                    let step = match get_bit(tape, position) {
+                        Zero => &self.states[state].zero,
+                        One => &self.states[state].one,
+                    };
+                    set_bit(&mut tape, position, step.print);
+                    match step.motion {
+                        Left if position == bits - 1 => exited = Some(Left),
+                        Right if position == 0 => exited = Some(Right),
+                        Left => position += 1,
+                        Right => position -= 1,
+                    }
+                    self.state = step.next_state;
+                } else {
+                    break;
+                }
+            }
+            let direction_state: u8 = match self.state {
+                Index(state) => state as u8,
+                HALT => !0 << 1,
+            } | match exited {
+                None | Some(Right) => 0,
+                Some(Left) => 1,
+            };
+            steps[i] = CompiledStep {
+                tape: tape,
+                direction_state: direction_state,
+            }
+        }
+
+        return CompiledTuringMachine {
+            tm: self,
+            lut: steps,
+        };
+    }
+}
+
+impl<T: Unsigned + PrimInt, const N: usize> Index<CompiledStep<T>> for CompiledTuringMachine<T, N> {
+    type Output = CompiledStep<T>;
+
+    fn index(&self, index: CompiledStep<T>) -> &Self::Output {
+        let bits = size_of::<T>() * 8;
+        let vec_index: usize =
+            index.tape.to_usize().unwrap() | (index.direction_state as usize) << bits;
+        return &self.lut.get(vec_index).unwrap();
+    }
+}
+
+impl<T: Unsigned + PrimInt, const N: usize> CompiledTuringMachine<T, N> {
+    // fn run(&mut )
 }
 
 fn main() {
@@ -342,6 +455,15 @@ fn main() {
     let mut tape = Tape::<u8>::new();
     tape.right[0] = 0x03;
     tm.run_verbose(&mut tape);
+    let comp = tm.compile::<u16>();
+    let test_index = 0b01111111111111100;
+    println!(
+        "{}\t{:?}\t{}\t{}",
+        comp.lut.len(),
+        comp.lut[test_index],
+        as_bits(comp.lut[test_index].tape),
+        size_of::<CompiledStep<u32>>()
+    );
 }
 
 /*
